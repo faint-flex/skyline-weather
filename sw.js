@@ -1,6 +1,6 @@
 // Skyline service worker: app shell offline, forecast network-first with last-known fallback.
-const SHELL = "skyline-shell-v4";
-const DATA = "skyline-data-v4";
+const SHELL = "skyline-shell-v5";
+const DATA = "skyline-data-v5";
 const SHELL_FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
@@ -12,10 +12,11 @@ self.addEventListener("activate", e => {
   )).then(() => self.clients.claim()));
 });
 
-async function networkFirst(req, cacheName) {
+async function networkFirst(req, cacheName, bypassHttpCache = false) {
   const cache = await caches.open(cacheName);
   try {
-    const res = await fetch(req);
+    // app files skip the browser's HTTP cache (GitHub Pages allows 10 min) so updates land on next open
+    const res = await (bypassHttpCache ? fetch(req.url, { cache: "no-cache", credentials: "same-origin" }) : fetch(req));
     if (res.ok) cache.put(req, res.clone());
     return res;
   } catch (err) {
@@ -38,5 +39,5 @@ self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
   if (url.hostname === "api.open-meteo.com") e.respondWith(networkFirst(e.request, DATA));
   else if (url.hostname.endsWith("fonts.googleapis.com") || url.hostname.endsWith("fonts.gstatic.com") || url.hostname === "cdnjs.cloudflare.com") e.respondWith(cacheFirst(e.request, SHELL));
-  else if (url.origin === self.location.origin) e.respondWith(networkFirst(e.request, SHELL));
+  else if (url.origin === self.location.origin) e.respondWith(networkFirst(e.request, SHELL, true));
 });
