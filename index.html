@@ -78,6 +78,7 @@
     -webkit-tap-highlight-color: transparent;
     transition: background-color .6s ease;
   }
+  body::before { content: ""; position: fixed; z-index: 1200; top: 0; left: 0; right: 0; height: env(safe-area-inset-top, 0px); background: var(--sky-top); pointer-events: none; }
   .wrap { max-width: 980px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .wrap > * { min-width: 0; }
 
@@ -262,7 +263,7 @@
 
   <footer>
     <span id="updated">&nbsp;</span>
-    <span>Skyline v5 · Data: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0)</span>
+    <span>Skyline v6 · Data: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0)</span>
   </footer>
 </div>
 
@@ -472,20 +473,27 @@
   const PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></svg>';
   const RADAR_ZOOM = 7;
   const darkMQ = matchMedia("(prefers-color-scheme: dark)");
-  const radar = { map: null, base: null, marker: null, frames: [], layers: [], cur: 0, timer: null, fetchedAt: 0 };
+  const radar = { map: null, base: null, labels: null, marker: null, frames: [], layers: [], cur: 0, timer: null, fetchedAt: 0 };
   const isDark = () => { const t = document.documentElement.dataset.theme; return t ? t === "dark" : darkMQ.matches; };
-  const baseUrl = () => `https://{s}.basemaps.cartocdn.com/${isDark() ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`;
+  // Esri gray canvas: keyless base + separate labels layer drawn above the radar
+  const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas";
+  const baseUrl = () => `${ESRI}/World_${isDark() ? "Dark" : "Light"}_Gray_Base/MapServer/tile/{z}/{y}/{x}`;
+  const labelsUrl = () => `${ESRI}/World_${isDark() ? "Dark" : "Light"}_Gray_Reference/MapServer/tile/{z}/{y}/{x}`;
 
   function initRadar() {
     if (!window.L) { $("rtime").textContent = "Radar couldn't load. Check your connection."; return; }
     const m = L.map("radar", { scrollWheelZoom: false, minZoom: 3, maxZoom: 11 })
       .setView([place.latitude, place.longitude], RADAR_ZOOM);
     radar.map = m;
-    radar.base = L.tileLayer(baseUrl(), { subdomains: "abcd", maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>' }).addTo(m);
+    radar.base = L.tileLayer(baseUrl(), { maxNativeZoom: 16, maxZoom: 19,
+      attribution: 'Map &copy; <a href="https://www.esri.com">Esri</a>, HERE, Garmin, &copy; OpenStreetMap' }).addTo(m);
+    m.createPane("labels");
+    m.getPane("labels").style.zIndex = 450;
+    m.getPane("labels").style.pointerEvents = "none";
+    radar.labels = L.tileLayer(labelsUrl(), { pane: "labels", maxNativeZoom: 16, maxZoom: 19 }).addTo(m);
     m.attributionControl.setPrefix(false).addAttribution('Radar NOAA NEXRAD via <a href="https://mesonet.agron.iastate.edu">Iowa Env. Mesonet</a>');
     radar.marker = L.circleMarker([place.latitude, place.longitude], { radius: 6, weight: 2.5, color: "#ffffff", fillColor: "#e0772b", fillOpacity: 1, pane: "markerPane" }).addTo(m);
-    if (darkMQ.addEventListener) darkMQ.addEventListener("change", () => radar.base.setUrl(baseUrl()));
+    if (darkMQ.addEventListener) darkMQ.addEventListener("change", () => { radar.base.setUrl(baseUrl()); radar.labels.setUrl(labelsUrl()); });
     $("rplay").innerHTML = PLAY;
     $("rplay").onclick = () => radar.timer ? stopLoop() : startLoop();
     $("rslider").oninput = e => { stopLoop(); showFrame(+e.target.value); };
