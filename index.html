@@ -503,8 +503,10 @@
       stopLoop();
       radar.layers.forEach(l => radar.map.removeLayer(l));
       radar.frames = frames;
-      radar.layers = frames.map(f => L.tileLayer(`${j.host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`,
-        { opacity: 0, maxNativeZoom: RADAR_ZOOM, maxZoom: 10, zIndex: 10 }).addTo(radar.map));
+      // 512px tiles (zoomOffset -1) keep us well under RainViewer's free-tier burst limit;
+      // past that it serves "API key required" images instead of radar.
+      radar.layers = frames.map(f => L.tileLayer(`${j.host}${f.path}/512/{z}/{x}/{y}/2/1_1.png`,
+        { tileSize: 512, zoomOffset: -1, opacity: 0, maxNativeZoom: 8, maxZoom: 10, zIndex: 10, keepBuffer: 0, updateWhenZooming: false }).addTo(radar.map));
       radar.cur = 0;
       $("rslider").max = frames.length - 1;
       $("rslider").disabled = false; $("rplay").disabled = false;
