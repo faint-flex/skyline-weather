@@ -263,7 +263,7 @@
 
   <footer>
     <span id="updated">&nbsp;</span>
-    <span>Skyline v6 · Data: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0)</span>
+    <span>Skyline v7 · Data: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0)</span>
   </footer>
 </div>
 
@@ -339,7 +339,6 @@
   let lastLoad = 0;
   async function load() {
     lastLoad = Date.now();
-    if (radar.map && Date.now() - radar.fetchedAt > 5 * 60 * 1000) loadRadar();
     document.body.classList.add("loading");
     $("status").hidden = true;
     const p = new URLSearchParams({
@@ -473,7 +472,7 @@
   const PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></svg>';
   const RADAR_ZOOM = 7;
   const darkMQ = matchMedia("(prefers-color-scheme: dark)");
-  const radar = { map: null, base: null, labels: null, marker: null, frames: [], layers: [], cur: 0, timer: null, fetchedAt: 0 };
+  const radar = { map: null, base: null, labels: null, marker: null, frames: [], layers: [], cur: 0, timer: null, fetchedAt: 0, valid: 0, loading: false };
   const isDark = () => { const t = document.documentElement.dataset.theme; return t ? t === "dark" : darkMQ.matches; };
   // Esri gray canvas: keyless base + separate labels layer drawn above the radar
   const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas";
@@ -506,27 +505,43 @@
   const inConus = (lat, lon) => lat > 23.5 && lat < 50.5 && lon > -126 && lon < -65;
 
   async function loadRadar() {
-    if (!radar.map) return;
+    if (!radar.map || radar.loading) return;
+    radar.loading = true;
     radar.fetchedAt = Date.now();
-    let valid;
     try {
-      const r = await fetch("https://mesonet.agron.iastate.edu/data/gis/images/4326/USCOMP/n0q_0.json", { cache: "no-store" });
-      valid = Date.parse((await r.json()).meta.valid);
-    } catch {}
-    if (!valid || isNaN(valid)) valid = Math.floor((Date.now() - 5 * 60000) / 300000) * 300000;
-    const wasPlaying = !!radar.timer;
-    stopLoop();
-    radar.layers.forEach(l => radar.map.removeLayer(l));
-    // cache-bust per frame time so a refresh never shows a stale image
-    radar.frames = RADAR_STEPS.map(m => ({ time: (valid - m * 60000) / 1000, suffix: m ? `-m${String(m).padStart(2, "0")}m` : "" }));
-    radar.layers = radar.frames.map(f => L.tileLayer(`${IEM}${f.suffix}/{z}/{x}/{y}.png?t=${f.time}`,
-      { opacity: 0, maxNativeZoom: 10, maxZoom: 11, zIndex: 10, keepBuffer: 0, updateWhenZooming: false }).addTo(radar.map));
-    radar.cur = 0;
-    $("rslider").max = radar.frames.length - 1;
-    $("rslider").disabled = false; $("rplay").disabled = false;
-    showFrame(radar.frames.length - 1);
-    if (wasPlaying) startLoop();
-    updateCoverage();
+      let valid;
+      try {
+        const r = await fetch("https://mesonet.agron.iastate.edu/data/gis/images/4326/USCOMP/n0q_0.json", { cache: "no-store" });
+        valid = Date.parse((await r.json()).meta.valid);
+      } catch {}
+      if (!valid || isNaN(valid)) valid = Math.floor((Date.now() - 5 * 60000) / 300000) * 300000;
+      if (valid === radar.valid) return; // NOAA hasn't published a new scan yet
+
+      const frames = RADAR_STEPS.map(m => ({ time: (valid - m * 60000) / 1000, suffix: m ? `-m${String(m).padStart(2, "0")}m` : "" }));
+      // cache-bust per frame time so a refresh never shows a stale image
+      const layers = frames.map(f => L.tileLayer(`${IEM}${f.suffix}/{z}/{x}/{y}.png?t=${f.time}`,
+        { opacity: 0, maxNativeZoom: 10, maxZoom: 11, zIndex: 10, keepBuffer: 0, updateWhenZooming: false }).addTo(radar.map));
+      // keep the old loop on screen until the newest scan has downloaded, so refreshes don't flash blank
+      if (radar.layers.length) {
+        await new Promise(res => { layers[layers.length - 1].once("load", res); setTimeout(res, 8000); });
+      }
+      const wasPlaying = !!radar.timer;
+      const wasOnLatest = !radar.layers.length || radar.cur === radar.layers.length - 1;
+      const keepIdx = radar.cur;
+      stopLoop();
+      radar.layers.forEach(l => radar.map.removeLayer(l));
+      radar.layers = layers;
+      radar.frames = frames;
+      radar.valid = valid;
+      radar.cur = 0;
+      $("rslider").max = frames.length - 1;
+      $("rslider").disabled = false; $("rplay").disabled = false;
+      showFrame(wasOnLatest || wasPlaying ? frames.length - 1 : keepIdx);
+      if (wasPlaying) startLoop();
+      updateCoverage();
+    } finally {
+      radar.loading = false;
+    }
   }
   function updateCoverage() {
     $("rnote").hidden = inConus(place.latitude, place.longitude);
@@ -637,6 +652,11 @@
   initRadar();
   load();
   setInterval(load, 15 * 60 * 1000);
+  // NOAA publishes a new radar scan every 5 minutes; keep up while the app is on screen
+  // a new scan is due ~6 min after the last one; check at most once a minute until it appears
+  const radarStale = () => Date.now() - radar.fetchedAt > 55 * 1000 && Date.now() - radar.valid > 6 * 60 * 1000;
+  setInterval(() => { if (document.visibilityState === "visible" && radarStale()) loadRadar(); }, 60 * 1000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && radarStale()) loadRadar(); });
   // refresh when the app comes back to the foreground after 10+ minutes
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && Date.now() - lastLoad > 10 * 60 * 1000) load();
