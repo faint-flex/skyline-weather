@@ -1,6 +1,6 @@
 // Skyline service worker: app shell offline, forecast network-first with last-known fallback.
-const SHELL = "skyline-shell-v3";
-const DATA = "skyline-data-v3";
+const SHELL = "skyline-shell-v4";
+const DATA = "skyline-data-v4";
 const SHELL_FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./apple-touch-icon.png"];
 
 self.addEventListener("install", e => {

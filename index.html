@@ -181,7 +181,8 @@
   .radar-controls .btn { padding: 8px; width: 38px; height: 38px; justify-content: center; }
   .radar-controls input[type=range] { flex: 1 1 160px; accent-color: var(--accent); min-width: 0; }
   .legend { display: flex; align-items: center; gap: 8px; font: 11px var(--mono); color: var(--ink-faint); }
-  .legend i { width: 96px; height: 7px; border-radius: 4px; background: linear-gradient(90deg, #9fdcff, #2f8fef, #1446c9, #f7df3b, #f58a1f, #e2251d, #c127c4); }
+  .legend i { width: 96px; height: 7px; border-radius: 4px; background: linear-gradient(90deg, #04e9e7, #019ff4, #0300f4, #02fd02, #008e00, #fdf802, #fd9500, #fd0000, #bc0000, #f800fd); }
+  .radar-note { position: absolute; z-index: 1000; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(280px, 85%); text-align: center; padding: 12px 14px; border-radius: 12px; background: var(--sky-bot); color: var(--ink); border: 1px solid var(--panel-line); font-size: 13px; }
   @media (prefers-reduced-motion: reduce) { .radar-map .leaflet-layer { transition: none; } }
 
   footer { font-size: 12px; color: var(--ink-faint); display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; }
@@ -237,10 +238,10 @@
 
   <section class="panel" id="radarPanel">
     <div class="radar-head">
-      <p class="label">Radar · past 2 hours</p>
+      <p class="label">NEXRAD radar · past hour</p>
       <span class="rtime" id="rtime" aria-live="polite">Loading radar…</span>
     </div>
-    <div class="radar-map" id="radar" role="region" aria-label="Precipitation radar map"></div>
+    <div class="radar-map" id="radar" role="region" aria-label="Precipitation radar map"><div class="radar-note" id="rnote" hidden>NEXRAD radar covers the lower 48 states. Search for a US city to see it.</div></div>
     <div class="radar-controls">
       <button class="btn" type="button" id="rplay" aria-label="Play radar loop" disabled></button>
       <input type="range" id="rslider" min="0" max="0" value="0" aria-label="Radar frame time" disabled>
@@ -477,12 +478,12 @@
 
   function initRadar() {
     if (!window.L) { $("rtime").textContent = "Radar couldn't load. Check your connection."; return; }
-    const m = L.map("radar", { scrollWheelZoom: false, minZoom: 3, maxZoom: 10 })
+    const m = L.map("radar", { scrollWheelZoom: false, minZoom: 3, maxZoom: 11 })
       .setView([place.latitude, place.longitude], RADAR_ZOOM);
     radar.map = m;
     radar.base = L.tileLayer(baseUrl(), { subdomains: "abcd", maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>' }).addTo(m);
-    m.attributionControl.setPrefix(false).addAttribution('Radar <a href="https://www.rainviewer.com">RainViewer</a>');
+    m.attributionControl.setPrefix(false).addAttribution('Radar NOAA NEXRAD via <a href="https://mesonet.agron.iastate.edu">Iowa Env. Mesonet</a>');
     radar.marker = L.circleMarker([place.latitude, place.longitude], { radius: 6, weight: 2.5, color: "#ffffff", fillColor: "#e0772b", fillOpacity: 1, pane: "markerPane" }).addTo(m);
     if (darkMQ.addEventListener) darkMQ.addEventListener("change", () => radar.base.setUrl(baseUrl()));
     $("rplay").innerHTML = PLAY;
@@ -491,30 +492,36 @@
     loadRadar();
   }
 
+  // NOAA NEXRAD composite (lower 48) from Iowa Environmental Mesonet: current frame + 5-min steps back 55 min.
+  const IEM = "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913";
+  const RADAR_STEPS = [55, 50, 45, 40, 35, 30, 25, 20, 15, 10, 5, 0];
+  const inConus = (lat, lon) => lat > 23.5 && lat < 50.5 && lon > -126 && lon < -65;
+
   async function loadRadar() {
     if (!radar.map) return;
     radar.fetchedAt = Date.now();
+    let valid;
     try {
-      const r = await fetch("https://api.rainviewer.com/public/weather-maps.json", { cache: "no-store" });
-      const j = await r.json();
-      const frames = [...(j.radar?.past || []), ...(j.radar?.nowcast || [])];
-      if (!frames.length) throw new Error("no frames");
-      const wasPlaying = !!radar.timer;
-      stopLoop();
-      radar.layers.forEach(l => radar.map.removeLayer(l));
-      radar.frames = frames;
-      // 512px tiles (zoomOffset -1) keep us well under RainViewer's free-tier burst limit;
-      // past that it serves "API key required" images instead of radar.
-      radar.layers = frames.map(f => L.tileLayer(`${j.host}${f.path}/512/{z}/{x}/{y}/2/1_1.png`,
-        { tileSize: 512, zoomOffset: -1, opacity: 0, maxNativeZoom: 8, maxZoom: 10, zIndex: 10, keepBuffer: 0, updateWhenZooming: false }).addTo(radar.map));
-      radar.cur = 0;
-      $("rslider").max = frames.length - 1;
-      $("rslider").disabled = false; $("rplay").disabled = false;
-      showFrame(frames.length - 1);
-      if (wasPlaying) startLoop();
-    } catch {
-      $("rtime").textContent = "Radar is unavailable right now.";
-    }
+      const r = await fetch("https://mesonet.agron.iastate.edu/data/gis/images/4326/USCOMP/n0q_0.json", { cache: "no-store" });
+      valid = Date.parse((await r.json()).meta.valid);
+    } catch {}
+    if (!valid || isNaN(valid)) valid = Math.floor((Date.now() - 5 * 60000) / 300000) * 300000;
+    const wasPlaying = !!radar.timer;
+    stopLoop();
+    radar.layers.forEach(l => radar.map.removeLayer(l));
+    // cache-bust per frame time so a refresh never shows a stale image
+    radar.frames = RADAR_STEPS.map(m => ({ time: (valid - m * 60000) / 1000, suffix: m ? `-m${String(m).padStart(2, "0")}m` : "" }));
+    radar.layers = radar.frames.map(f => L.tileLayer(`${IEM}${f.suffix}/{z}/{x}/{y}.png?t=${f.time}`,
+      { opacity: 0, maxNativeZoom: 10, maxZoom: 11, zIndex: 10, keepBuffer: 0, updateWhenZooming: false }).addTo(radar.map));
+    radar.cur = 0;
+    $("rslider").max = radar.frames.length - 1;
+    $("rslider").disabled = false; $("rplay").disabled = false;
+    showFrame(radar.frames.length - 1);
+    if (wasPlaying) startLoop();
+    updateCoverage();
+  }
+  function updateCoverage() {
+    $("rnote").hidden = inConus(place.latitude, place.longitude);
   }
 
   function showFrame(i) {
@@ -525,7 +532,7 @@
     $("rslider").value = i;
     const when = new Date(radar.frames[i].time * 1000);
     const mins = Math.round((Date.now() - when) / 60000);
-    const rel = mins <= 10 ? "latest" : mins < 60 ? `${mins} min ago` : `${Math.floor(mins / 60)} h ${mins % 60} min ago`;
+    const rel = i === radar.frames.length - 1 ? "latest" : mins < 60 ? `${mins} min ago` : `${Math.floor(mins / 60)} h ${mins % 60} min ago`;
     $("rtime").innerHTML = `${when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}<small>${rel}</small>`;
   }
   function startLoop() {
@@ -547,6 +554,7 @@
     if (!radar.map) return;
     radar.map.setView([place.latitude, place.longitude], RADAR_ZOOM);
     radar.marker.setLatLng([place.latitude, place.longitude]);
+    updateCoverage();
   }
 
   // ---------- search ----------
